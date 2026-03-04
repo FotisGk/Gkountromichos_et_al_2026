@@ -1,0 +1,27 @@
+# macOS
+.DS_Store
+._*
+
+# R
+.Rhistory
+.RData
+.Rproj.user
+
+# Generated outputs
+*.html
+07_microscopy/figures/
+07_microscopy/image_feature_analysis_files/
+
+# Data symlinks (user must create locally)
+07_microscopy/tiffs
+
+# QC scripts (SFig 2A — not part of public release, see README Notes)
+07_qc/
+
+# Internal reference (not for public)
+original/
+not_github/
+VALIDATION_REPORT.md
+VALIDATION_REPORT.html
+PUBLICATION_CODE_AUDIT.md
+PUBLICATION_CODE_AUDIT.html

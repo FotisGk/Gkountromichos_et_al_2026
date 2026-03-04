@@ -1,0 +1,483 @@
+---
+title: "MSL2 Immunofluorescence Image Feature Analysis"
+author: "Muhunden Jayakrishnan / Fotios Gkountromichos"
+date: "2025"
+output:
+  html_document:
+    fig_caption: true
+---
+
+# Figures produced
+# - Fig 2E:   Combined UMAP coloured by genotype + individual genotype UMAPs
+# - SFig 1A:  Replicate UMAPs (run this script on each replicate directory)
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+if (!dir.exists("figures")) dir.create("figures")
+
+library(tiff)
+library(tidyverse)
+library(ggplot2)
+library(caret)
+library(tidymodels)
+library(corrr)
+library(ggfortify)
+library(GLCMTextures)
+library(EBImage)
+library(reticulate)
+library(ComplexHeatmap)
+library(umap)
+library(cluster)
+```
+
+## Genotype extraction and colour palette
+
+```{r genotype_helpers, echo=TRUE}
+extract_genotype <- function(filename) {
+  fname <- tolower(filename)
+  if (grepl("rox2ko17_a0b0|a0b0", fname))             return("rox2ko17_a0b0")
+  if (grepl("rox2ko17_a3b0|a3b0", fname))             return("rox2ko17_a3b0")
+  if (grepl("minirox", fname))                          return("rox2ko17_minirox")
+  if (grepl("rox2ko17_rox1d3f|rox1d3f", fname))       return("rox2ko17_rox1d3f")
+  if (grepl("rox2ko17_rox2fl|rox2fl|rox2_fl", fname)) return("rox2ko17_rox2fl")
+  if (grepl("rox2ko17", fname))                         return("rox2ko17")
+  if (grepl("rox2ko112", fname))                        return("rox2ko112")
+  if (grepl("wt", fname))                               return("wt")
+  return(NA)
+}
+
+genotype_order <- c(
+  "wt", "rox2ko112", "rox2ko17", "rox2ko17_rox2fl",
+  "rox2ko17_minirox", "rox2ko17_a0b0", "rox2ko17_a3b0",
+  "rox2ko17_rox1d3f"
+)
+
+genotype_colors <- c(
+  wt               = "#009E73",
+  rox2ko112        = "yellow3",
+  rox2ko17         = "#f77f00",
+  rox2ko17_rox2fl  = "springgreen3",
+  rox2ko17_minirox = "#8338ec",
+  rox2ko17_a0b0    = "#ff6600",
+  rox2ko17_a3b0    = "#ff006e",
+  rox2ko17_rox1d3f = "#3a86ff"
+)
+```
+
+## Read images
+
+Read all TIFF files once, extract MSL2 channel (channel 2), and filter to
+multi-channel files only.
+
+```{r read_images, echo=TRUE}
+list_files <- list.files(path = "tiffs", pattern = "\\.tif$", full.names = TRUE)
+image_genotypes <- sapply(list_files, extract_genotype)
+
+cat("Reading TIFF files (this may take a moment)...\n")
+image_data_list <- lapply(seq_along(list_files), function(i) {
+  if (i %% 500 == 0) cat("  Processed", i, "of", length(list_files), "files...\n")
+  img_channels <- suppressWarnings(readTIFF(list_files[i], as.is = TRUE, all = TRUE))
+  list(
+    is_multichannel = is.list(img_channels) && length(img_channels) >= 2,
+    channel2 = if (is.list(img_channels) && length(img_channels) >= 2)
+                 img_channels[[2]] else NULL
+  )
+})
+
+is_multichannel <- sapply(image_data_list, function(x) x$is_multichannel)
+cat("Total files found:", length(list_files), "\n")
+cat("Multichannel files:", sum(is_multichannel), "\n")
+cat("Single-channel files excluded:", sum(!is_multichannel), "\n")
+
+list_files      <- list_files[is_multichannel]
+image_genotypes <- image_genotypes[is_multichannel]
+image_raw       <- lapply(image_data_list[is_multichannel], function(x) x$channel2)
+unique_genotypes <- unique(image_genotypes)
+rm(image_data_list)
+
+cat("Genotypes after filtering:", paste(unique_genotypes, collapse = ", "), "\n")
+```
+
+## Display example nuclei
+
+```{r example_nuclei, echo=TRUE, fig.height=8, fig.width=12}
+set.seed(1254)
+par(mfrow = c(2, 3))
+for (i in seq_along(unique_genotypes)) {
+  genotype_indices <- which(image_genotypes == unique_genotypes[i])
+  if (length(genotype_indices) >= 6) {
+    selected_indices <- genotype_indices[sample.int(length(genotype_indices), 6)]
+  } else {
+    selected_indices <- genotype_indices
+  }
+  for (j in seq_along(selected_indices)) {
+    image(image_raw[[selected_indices[j]]], col = gray.colors(256),
+          main = paste(unique_genotypes[i], "_", j), asp = 1)
+    axis(1, 0:1, 0:1)
+  }
+}
+```
+
+## Per-cell mean intensity violin plot
+
+```{r per_cell_violin, echo=TRUE, fig.height=5, fig.width=7, message=FALSE, warning=FALSE}
+cell_stats <- data.frame(genotype = character(), mean_intensity = numeric())
+for (i in seq_along(list_files)) {
+  img <- image_raw[[i]]
+  if (is.matrix(img)) {
+    cell_stats <- rbind(cell_stats, data.frame(
+      genotype       = image_genotypes[i],
+      mean_intensity = mean(img)
+    ))
+  }
+}
+
+p <- ggplot(cell_stats, aes(x = genotype, y = mean_intensity, fill = genotype)) +
+  geom_violin(trim = FALSE, alpha = 0.5) +
+  geom_boxplot(width = 0.1, outlier.size = 0.5, alpha = 0.7) +
+  labs(title = "Per-Cell Mean MSL2 Intensity by Genotype",
+       x = "Genotype", y = "Mean MSL2 Intensity") +
+  theme_minimal()
+print(p)
+ggsave("figures/per_cell_mean_intensity_violin.png", p, width = 7, height = 5)
+```
+
+## Extract GLCM and object features (46 per cell)
+
+Images are normalised to 0-1 range per image (`y / max(y)`) prior to
+feature extraction (Methods: "Images were normalized to a 0-1 intensity
+range prior to feature extraction").
+
+```{r glcm_object_features, echo=TRUE, fig.keep='none'}
+res_method <- as.data.frame(matrix(nrow = length(list_files), ncol = 46))
+
+for (i in seq_along(list_files)) {
+  y <- Image(image_raw[[i]])
+  y <- y / max(y)
+
+  imagename <- gsub("tiffs/MSL2gp_*", "", gsub(".tif", "", list_files[i]))
+
+  if (i %in% c(19, 16, 28)) {
+    plot(y)
+    hist(as.vector(imageData(y)), main = imagename, breaks = 50)
+  }
+
+  # Haralick texture features (whole-image mask) -- 26 features
+  x <- Image(1, dim = dim(y))
+  res_method[i, 1:26] <- colMeans(computeFeatures.haralick(x, y))
+
+  # Mean intensity -- 1 feature
+  res_method[i, 27] <- mean(imageData(y))
+
+  # Object detection: Gaussian blur + threshold at 0.85
+  y_2 <- gblur(y, sigma = 0.3)
+  cutoff <- 0.85
+  x <- y_2 > cutoff
+
+  if (i %in% c(19, 16, 28)) plot(x)
+
+  # Object features (moment + shape + basic) -- 19 features
+  if (sum(imageData(x)) == 0) {
+    res_method[i, 28:46] <- 0
+  } else {
+    res_method[i, 28:46] <- c(
+      computeFeatures.moment(x, y),
+      computeFeatures.shape(x),
+      computeFeatures.basic(x, y)
+    )
+  }
+  rownames(res_method)[i] <- imagename
+}
+head(res_method)
+```
+
+## Remove duplicates
+
+```{r remove_duplicates, echo=TRUE}
+cat("Duplicated rows:", sum(duplicated(res_method)), "\n")
+res_method <- res_method[!duplicated(res_method), ]
+```
+
+## Correlation plot
+
+```{r correlation_plot, echo=TRUE, fig.height=8, fig.width=10}
+labels <- sapply(rownames(res_method), extract_genotype)
+head(labels)
+table(labels)
+
+corr_plot <- res_method %>%
+  dplyr::select(where(is.numeric)) %>%
+  corrr::correlate() %>%
+  shave() %>%
+  rplot(print_cor = TRUE) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+print(corr_plot)
+ggsave("figures/correlation_plot.png", corr_plot, width = 10, height = 8)
+```
+
+## Data cleaning and UMAP (Fig 2E)
+
+```{r umap_all, echo=TRUE, fig.height=6, fig.width=8}
+res_method$genotype <- labels
+
+filt_recipe <- recipe(genotype ~ ., data = res_method) %>%
+  step_normalize(all_numeric_predictors()) %>%
+  step_nzv(all_predictors()) %>%
+  step_corr(all_numeric(), threshold = 0.85)
+filt_prep <- filt_recipe %>% prep(training = res_method)
+tidy(filt_prep, number = 3)
+filt_bake <- filt_prep %>% bake(new_data = NULL)
+
+set.seed(179)
+umap_res <- umap(filt_bake %>% dplyr::select(-genotype),
+                 n_neighbors = 100, min_dist = 0.1)
+umap_df  <- as.data.frame(umap_res$layout)
+umap_df$genotype <- filt_bake$genotype
+
+# --- Fig 2E: Combined UMAP coloured by genotype ---
+umap_genotype <- ggplot(umap_df, aes(x = V1, y = V2, col = genotype, alpha = 0.5)) +
+  geom_point() +
+  scale_color_manual(values = genotype_colors) +
+  labs(title = "UMAP by Genotype", x = "UMAP 1", y = "UMAP 2",
+       color = "Genotype") +
+  theme_void(base_size = 16, base_family = "Helvetica") +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    legend.title = element_text(size = 12),
+    legend.text  = element_text(size = 10)
+  )
+print(umap_genotype)
+ggsave("figures/umap_by_genotype.png", umap_genotype, width = 8, height = 6)
+```
+
+## Individual genotype UMAPs (Fig 2E panels)
+
+Each genotype highlighted against a grey background of all other cells.
+
+```{r umap_individual, echo=TRUE, fig.height=6, fig.width=8}
+set.seed(179)
+umap_res <- umap(filt_bake %>% dplyr::select(-genotype),
+                 n_neighbors = 100, min_dist = 0.1)
+umap_df  <- as.data.frame(umap_res$layout)
+umap_df$genotype <- filt_bake$genotype
+
+genotypes <- unique(umap_df$genotype)
+
+for (i in seq_along(genotypes)) {
+  geno <- genotypes[i]
+  background_data <- umap_df %>% filter(genotype != geno)
+  highlight_data  <- umap_df %>% filter(genotype == geno)
+
+  p <- ggplot() +
+    geom_point(data = background_data, aes(x = V1, y = V2),
+               color = "gray80", alpha = 0.3, size = 1) +
+    geom_point(data = highlight_data, aes(x = V1, y = V2),
+               color = genotype_colors[geno], alpha = 0.8, size = 1.5) +
+    labs(title = paste("UMAP -", geno), x = "UMAP 1", y = "UMAP 2") +
+    theme_void(base_size = 16, base_family = "Helvetica") +
+    theme(plot.title = element_text(hjust = 0.5, size = 14, face = "bold"))
+  print(p)
+
+  ggsave(sprintf("figures/umap_by_genotype_%s.png", geno),
+         p, width = 8, height = 6)
+  ggsave(sprintf("figures/umap_by_genotype_%s.pdf", geno),
+         p, width = 8, height = 6)
+  cat(sprintf("Done: umap_by_genotype_%s.png\n", geno))
+}
+```
+
+## K-means clustering
+
+```{r kmeans_elbow, echo=TRUE, fig.height=6, fig.width=10}
+k_values <- 1:10
+wss_values <- sapply(k_values, function(k) {
+  kmeans(umap_df %>% dplyr::select(-genotype), k, nstart = 25)$tot.withinss
+})
+
+elbow_plot <- data.frame(k = k_values, wss = wss_values) %>%
+  ggplot(aes(x = k, y = wss)) +
+  geom_line() + geom_point() +
+  scale_x_continuous(breaks = k_values) +
+  labs(title = "Elbow Method", x = "Number of clusters (k)",
+       y = "Total within-cluster sum of squares") +
+  theme_minimal()
+print(elbow_plot)
+ggsave("figures/elbow_plot.png", elbow_plot, width = 10, height = 6)
+```
+
+```{r silhouette, echo=TRUE, fig.height=5, fig.width=7}
+silhouette_scores <- sapply(k_values[-1], function(k) {
+  km <- kmeans(umap_df %>% dplyr::select(-genotype), centers = k, nstart = 25)
+  ss <- cluster::silhouette(km$cluster, dist(umap_df %>% dplyr::select(-genotype)))
+  mean(ss[, 3])
+})
+
+silhouette_plot <- data.frame(k = k_values[-1],
+                              silhouette = silhouette_scores) %>%
+  ggplot(aes(x = k, y = silhouette)) +
+  geom_line() + geom_point() +
+  scale_x_continuous(breaks = k_values[-1]) +
+  labs(title = "Silhouette Method", x = "Number of clusters (k)",
+       y = "Average silhouette width") +
+  theme_minimal()
+print(silhouette_plot)
+ggsave("figures/silhouette_plot.png", silhouette_plot, width = 7, height = 5)
+```
+
+```{r kmeans_final, echo=TRUE, fig.height=6, fig.width=8}
+final_kmeans <- kmeans(umap_df %>% dplyr::select(-genotype),
+                       centers = 3, nstart = 25)
+
+umap_df$cluster    <- final_kmeans$cluster
+res_method$cluster <- final_kmeans$cluster
+
+# Recode clusters to match manuscript labels
+recode_map <- c(`1` = 3, `2` = 1, `3` = 2)
+umap_df$cluster    <- dplyr::recode(umap_df$cluster, !!!recode_map)
+res_method$cluster <- dplyr::recode(res_method$cluster, !!!recode_map)
+
+cluster_colors <- c("1" = "#a6d96a", "2" = "#abd9e9", "3" = "#fdae61")
+
+cluster_plot <- ggplot(umap_df, aes(x = V1, y = V2,
+                                     col = as.factor(cluster))) +
+  geom_point(size = 1.5, alpha = 0.8) +
+  scale_color_manual(values = cluster_colors) +
+  labs(title = "UMAP by Cluster", x = "UMAP 1", y = "UMAP 2",
+       color = "Cluster") +
+  theme_void(base_size = 16, base_family = "Helvetica") +
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+        legend.title = element_text(size = 12),
+        legend.text  = element_text(size = 10))
+print(cluster_plot)
+ggsave("figures/umap_by_cluster.png", cluster_plot, width = 8, height = 6)
+ggsave("figures/umap_by_cluster.pdf", cluster_plot, width = 8, height = 6)
+```
+
+## Cluster composition by genotype
+
+```{r cluster_barplot, echo=TRUE, fig.height=6, fig.width=14}
+cluster_composition <- res_method %>%
+  dplyr::select(genotype, cluster) %>%
+  group_by(genotype, cluster) %>%
+  count() %>%
+  ungroup(cluster) %>%
+  mutate(prop = n / sum(n))
+
+bar_plot <- ggplot(cluster_composition,
+       aes(fill = as.factor(cluster), y = prop,
+           x = factor(genotype, levels = genotype_order))) +
+  geom_bar(position = "stack", stat = "identity") +
+  scale_fill_manual(values = cluster_colors) +
+  labs(title = "Cluster composition by genotype",
+       x = "Genotype", y = "Proportion of cells", fill = "Cluster") +
+  theme_minimal()
+print(bar_plot)
+ggsave("figures/cluster_composition_by_genotype.png", bar_plot,
+       width = 14, height = 6)
+ggsave("figures/cluster_composition_by_genotype.pdf", bar_plot,
+       width = 8, height = 6)
+```
+
+## Feature boxplots by cluster
+
+```{r feature_boxplots, echo=TRUE, fig.height=10, fig.width=12}
+umap_features  <- setdiff(colnames(filt_bake), "genotype")
+df_clustervals <- res_method[c(umap_features, "cluster")]
+
+boxplot_features <- df_clustervals %>%
+  pivot_longer(cols = -cluster, names_to = "feature", values_to = "value") %>%
+  ggplot(aes(x = as.factor(cluster), y = value)) +
+  geom_boxplot(outlier.size = 0.5) +
+  facet_wrap(~ feature, scales = "free") +
+  labs(x = "Cluster", y = "Feature Value")
+print(boxplot_features)
+ggsave("figures/features_by_cluster_boxplots.png", boxplot_features,
+       width = 12, height = 10)
+```
+
+## Statistical tests (Kruskal-Wallis + effect size)
+
+```{r stat_tests, echo=TRUE}
+find_meaningful_features <- function(df, p_threshold = 0.05,
+                                     effectsize_threshold = 0.1) {
+  results <- data.frame(
+    feature = colnames(df)[-ncol(df)],
+    p_value = sapply(df[-ncol(df)], function(x) {
+      kruskal.test(x ~ cluster, data = df)$p.value
+    }),
+    effectsize = sapply(df[-ncol(df)], function(x) {
+      H <- kruskal.test(x ~ cluster, data = df)$statistic
+      n <- length(x)
+      unname(H / ((n^2 - 1) / (n + 1)))
+    })
+  )
+  results$adj_p <- p.adjust(results$p_value, "fdr")
+  results %>%
+    filter(adj_p < p_threshold, effectsize > effectsize_threshold) %>%
+    arrange(adj_p)
+}
+significant_features <- find_meaningful_features(df_clustervals)
+significant_features
+```
+
+## Pairwise cluster tests (Wilcoxon)
+
+```{r pairwise_tests, echo=TRUE}
+pairwise_cluster_tests <- function(df, features) {
+  results <- list()
+  for (feat in features) {
+    comparisons <- combn(unique(df$cluster), 2, simplify = FALSE)
+    pair_results <- lapply(comparisons, function(pair) {
+      test <- wilcox.test(df[df$cluster == pair[1], feat],
+                          df[df$cluster == pair[2], feat])
+      data.frame(
+        feature     = feat,
+        cluster1    = pair[1],
+        cluster2    = pair[2],
+        p_value     = test$p.value,
+        median_diff = median(df[df$cluster == pair[1], feat]) -
+                      median(df[df$cluster == pair[2], feat])
+      )
+    })
+    results[[feat]] <- bind_rows(pair_results)
+  }
+  all_results       <- bind_rows(results)
+  all_results$adj_p <- p.adjust(all_results$p_value, "fdr")
+  all_results
+}
+pairwise_results <- pairwise_cluster_tests(df_clustervals,
+                                           significant_features$feature)
+pairwise_results
+```
+
+## Cluster-specific features
+
+```{r cluster_specific, echo=TRUE}
+find_cluster_specific_features <- function(pairwise_results) {
+  pairwise_results %>%
+    group_by(feature) %>%
+    mutate(
+      n_sig = sum(adj_p < 0.001),
+      specificity = case_when(
+        all(median_diff[adj_p < 0.001] > 0) ~
+          paste0("specific_to_", first(cluster1)),
+        all(median_diff[adj_p < 0.001] < 0) ~
+          paste0("specific_to_", first(cluster2)),
+        TRUE ~ "non_specific"
+      )
+    ) %>%
+    filter(specificity != "non_specific") %>%
+    arrange(specificity, adj_p)
+}
+specific_features <- find_cluster_specific_features(pairwise_results)
+specific_features
+```
+
+## Session info
+
+```{r session_info, echo=TRUE}
+sessionInfo()
+```
