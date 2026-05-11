@@ -24,6 +24,7 @@ publication_code/
 │   ├── site_dissection_analysis.R
 │   ├── motif_discovery.sh
 │   └── motif_scanning.sh
+│   └── mccs_promoter_analysis.R
 ├── 04_rnaseq_analysis/
 │   └── deseq2_differential.R
 ├── 05_copy_number/
@@ -67,10 +68,11 @@ publication_code/
 |-------|-----------|
 | SFig 1A – UMAP projections (additional replicates) | `07/image_feature_analysis.Rmd` |
 | SFig 2B–C – MSL2/H4K16ac signal at binding sites | `02/heatmaps_metaplots_csaw_sites.sh` |
-| SFig 3A – PCA | `04/deseq2_differential.R` |
-| SFig 3B – Sample correlation heatmap | `04/deseq2_differential.R` |
-| SFig 3C – Volcano plots | `04/deseq2_differential.R` |
-| SFig 4 – Smoothed chrX CN profiles | `05/chrX_supplementary_plot.R` |
+| SFig 3 - MCC at promoters | '03/mccs_promoter_analysis.R |
+| SFig 4A – PCA | `04/deseq2_differential.R` |
+| SFig 4B – Sample correlation heatmap | `04/deseq2_differential.R` |
+| SFig 4C – Volcano plots | `04/deseq2_differential.R` |
+| SFig 5 – Smoothed chrX CN profiles | `05/chrX_supplementary_plot.R` |
 
 ---
 
@@ -90,16 +92,17 @@ module.
  4   03_site_characterization/site_dissection_analysis.R   (needs step 1)
  5   03_site_characterization/motif_discovery.sh           (needs step 4)
  6   03_site_characterization/motif_scanning.sh
- 7   04_rnaseq_analysis/deseq2_differential.R
- 8   05_copy_number/spikein_normalization.sh
- 9   05_copy_number/copy_number_estimation.R
-10   05_copy_number/chrX_supplementary_plot.R
-11   06_dosage_compensation/expression_boxplots.R
-12   06_dosage_compensation/gene_level_cnv.R
-13   06_dosage_compensation/xa_ratio_barplots.R            (needs steps 9 + 12)
-14   07_microscopy/max_projection_and_rename.ijm            (Fiji)
-15   07_microscopy/segment_measure_crop.ijm                 (Fiji, needs step 14)
-16   07_microscopy/image_feature_analysis.Rmd               (needs step 15)
+ 7   03_site_characterization/mccs_promoter_analysis.R
+ 8   04_rnaseq_analysis/deseq2_differential.R
+ 9   05_copy_number/spikein_normalization.sh
+10   05_copy_number/copy_number_estimation.R
+11   05_copy_number/chrX_supplementary_plot.R
+12   06_dosage_compensation/expression_boxplots.R
+13   06_dosage_compensation/gene_level_cnv.R
+14   06_dosage_compensation/xa_ratio_barplots.R            (needs steps 9 + 12)
+15   07_microscopy/max_projection_and_rename.ijm            (Fiji)
+16   07_microscopy/segment_measure_crop.ijm                 (Fiji, needs step 14)
+17   07_microscopy/image_feature_analysis.Rmd               (needs step 15)
 ```
 
 ---
