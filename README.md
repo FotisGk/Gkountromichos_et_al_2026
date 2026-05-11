@@ -1,7 +1,7 @@
 # Publication Code
 
 Analysis scripts for Gkountromichos et al.  
-*"Dosage compensation defects due to roX RNA deletion are rescued by recalibration of X/autosome stoichiometry"*
+*"Dosage compensation defects due to roX RNA loss are rescued by recalibration of X/autosome stoichiometry"*
 
 ---
 
