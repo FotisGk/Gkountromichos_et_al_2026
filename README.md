@@ -68,11 +68,9 @@ publication_code/
 |-------|-----------|
 | SFig 1A – UMAP projections (additional replicates) | `07/image_feature_analysis.Rmd` |
 | SFig 2B–C – MSL2/H4K16ac signal at binding sites | `02/heatmaps_metaplots_csaw_sites.sh` |
-| SFig 3 - MCC at promoters | `03/mccs_promoter_analysis.R` |
-| SFig 4A – PCA | `04/deseq2_differential.R` |
-| SFig 4B – Sample correlation heatmap | `04/deseq2_differential.R` |
-| SFig 4C – Volcano plots | `04/deseq2_differential.R` |
-| SFig 5 – Smoothed chrX CN profiles | `05/chrX_supplementary_plot.R` |
+| SFig 3A-C - MCCS at promoters | `03/mccs_promoter_analysis.R` |
+| SFig 4A-C – ncRNA-seq analysis - PCA/Sample correlation heatmap/Volcano plots | `04/deseq2_differential.R` |
+| SFig 5A-B – Smoothed chrX CN profiles | `05/chrX_supplementary_plot.R` |
 
 ---
 
